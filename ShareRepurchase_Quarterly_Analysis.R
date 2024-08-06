@@ -6,6 +6,8 @@ library(mvtnorm)
 library(tidyr)
 library(readxl)
 library(ggplot2)
+library(patchwork) # To display 2 charts together
+library(hrbrthemes) # For ggplot2 themes
 
 options(scipen = 999)
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
@@ -39,7 +41,7 @@ data <- data %>%
 
 # MERGE in TR 13F data on institutional holdings 
 # Read the csv dataset in the current folder
-data_tr <- fread("tr_13f.csv")
+data_tr <- fread("../Data/tr_13f.csv")
 # check the first few rows
 head(data_tr)
 # generate fyearq fqtr using rdate
@@ -65,17 +67,14 @@ data %>%
   select(tic, fyearq, fqtr) %>%
   unique()
 
-# Generate banks dummy == 1 if naics == 522110
-data <- data %>%
-  mutate(banks = ifelse(naicsh == 522110, 1, 0))
-# check the number of banks and nonbanks firms
-data %>%
-  group_by(banks) %>%
-  summarise(total_firms = n())
 # replace NA to 0 for share repurchase and dividend
 data <- data %>%
   mutate(repurchase = ifelse(is.na(repurchase), 0, repurchase),
          dividend = ifelse(is.na(dividend), 0, dividend))
+
+# keep only the firms with naics == 522110
+data <- data %>%
+  filter(naicsh == 522110)
 
 # divide dividends and share-repurchase by 1,000 to make units $Billion
 data <- data %>%
@@ -89,68 +88,54 @@ data <- data %>%
 data <- data %>%
   mutate(dividend_dummy = ifelse(dividend > 0, 1, 0))
 
-# Generate the total sum of dividends and repurchases for each fyearq-fqtr by banks and nonbanks firms
-# as well as the total number of firms that issues dividends or repurchase in that year-quarter by banks dummy
+# Generate the total sum of dividends and repurchases for each fyearq-fqtr
+# as well as the total number of firms that issues dividends or repurchase in that year-quarter
 data1 <- data %>%
-  group_by(fyearq, banks) %>%
+  group_by(fyearq) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE),
             total_firms = n(), 
             total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
-            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
+            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE),
+            )
 
-# plot the times series trend of share repurchase and dividend sums by banks dummy
-# in the same ggplot (overlay plot))
-data1 %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(banks))) +
+# plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
+# keep only total dividend and total repurchase
+total_div_repur <- select(data1, c('fyearq','total_dividend','total_repurchase')) %>%
+  gather(key = "method", value = "value", -fyearq)
+total_div_repur %>%
+  ggplot(aes(x = fyearq, y = value, color = method)) +
   geom_line() +
   geom_point() +
-  labs(title = "Share Repurchase by Banks and Nonbanks Firms",
+  labs(title = "Total Dividends and Share Repurchase by Commercial Banks",
        x = "Year",
-       y = "Total Share Repurchase ($billion)",
-       color = "Banks Dummy") +
+       y = "Total Dividends and Share Repurchase ($billion)",
+       color = "Method") +
   theme_minimal() +
   theme(legend.position = "top")
-# save the plot as pdf
-ggsave("ShareRepurchase_Sum.pdf")
+# save to Results folder as pdf
+ggsave("../Results/Total_Div_Repur_Banks.pdf")
 
-data1 %>%
-  ggplot(aes(x = fyearq, y = total_dividend, color = factor(banks))) +
+# Plot the share of firms that issue dividends or repurchase using the same method as above
+# generate share of firms that issue dividends or repurchase
+data1 <- data1 %>%
+  mutate(share_dividend_firms = total_dividend_firms / total_firms,
+         share_repurchase_firms = total_repurchase_firms / total_firms)
+
+share_div_repur <- select(data1, c('fyearq','share_dividend_firms','share_repurchase_firms')) %>%
+  gather(key = "method", value = "value", -fyearq)
+share_div_repur %>%
+  ggplot(aes(x = fyearq, y = value, color = method)) +
   geom_line() +
   geom_point() +
-  labs(title = "Dividends by Banks and Nonbanks Firms",
+  labs(title = "Share of Banks that Issue Dividends and Share Repurchase",
        x = "Year",
-       y = "Total Dividends ($billion)",
-       color = "Banks Dummy") +
+       y = "Total Share of Banks that Issue Dividends and Share Repurchase",
+       color = "Method") +
   theme_minimal() +
   theme(legend.position = "top")
-# save the plot as pdf
-ggsave("Dividend_Sum.pdf")
-
-# Plot the share of firms that issue dividends or repurchase by banks dummy
-data1 %>%
-  ggplot(aes(x = fyearq, y = total_repurchase_firms / total_firms, color = factor(banks))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Share of Firms that Issue Dividends by Banks and Nonbanks Firms",
-       x = "Year",
-       y = "Share of Firms",
-       color = "Banks Dummy") +
-  theme_minimal() +
-  theme(legend.position = "top")
-ggsave("ShareRepurchase_Share.pdf")
-
-data1 %>%
-  ggplot(aes(x = fyearq, y = total_dividend_firms / total_firms, color = factor(banks))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Share of Firms that Issue Dividends by Banks and Nonbanks Firms",
-       x = "Year",
-       y = "Share of Firms",
-       color = "Banks Dummy") +
-  theme_minimal() +
-  theme(legend.position = "top")
-ggsave("Dividend_Share.pdf")
+# save to Results folder as pdf
+ggsave("../Results/Share_Div_Repur_Banks.pdf")
 
 # Check Trends for Specific Banks 
 # keep only the top 8 biggest banks using tic
@@ -181,7 +166,7 @@ data3 %>%
        color = "Bank Ticker") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("ShareRepurchase_Top8.pdf")
+ggsave("../Results/ShareRepurchase_Top8.pdf")
 
 # plot the time series trend of share repurchase and dividend sums in one figure for the top 8 banks
 # Use legend to show that one series is total_dividend, the other is total repurchase
@@ -198,30 +183,34 @@ data2 %>%
        color = "Method") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("Dividend_ShareRepurchase_Top8.pdf")
+ggsave("../Results/Dividend_ShareRepurchase_Top8.pdf")
 
 # Generate dummy variable for the top 8 banks "JPM", "BAC", "C", "WFC", "GS", "MS", "BK", "USB"
 data <- data %>%
   mutate(top8 = ifelse(tic %in% c("JPM", "BAC", "C", "WFC", "GS", "MS", "BK", "USB"), 1, 0))
-# keep only the banks
-data_bank <- data %>%
-  filter(banks == 1)
-# Generate dummy variable for the top 25 banks in each fyearq fqtr by atq 
-data_bank <- data_bank %>%
+
+# Generate dummy variable for the top 25 banks in each fyearq fqtr by atq of the quarter before
+data <- data %>%
   group_by(fyearq, fqtr) %>%
   mutate(rank = rank(-atq)) %>%
   ungroup() %>%
   mutate(top25 = ifelse(rank <= 25, 1, 0))
+# generate new variable top25_prev_quarter that equals 1 if the bank is in the top 25 in the previous quarter
+data <- data %>%
+  group_by(tic) %>%
+  mutate(top25_prev_quarter = lag(top25, 1)) %>%
+  ungroup() %>%
+  mutate(top25_prev_quarter = ifelse(is.na(top25_prev_quarter), 0, top25_prev_quarter))
 # generate total dividend and repurchase for the top 8 banks by fyearq
-data_bank_top8 <- data_bank %>%
+data_top8 <- data %>%
   group_by(fyearq, top8) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE),
             total_firms = n(), 
             total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
             total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
-data_bank_top25 <- data_bank %>%
-  group_by(fyearq, top25) %>%
+data_top25 <- data %>%
+  group_by(fyearq, top25_prev_quarter) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE),
             total_firms = n(), 
@@ -229,7 +218,7 @@ data_bank_top25 <- data_bank %>%
             total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
 
 # plot the total dividend and repurchase for the top 8 banks by fyearq
-data_bank_top8 %>%
+data_top8 %>%
   ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top8))) +
   geom_line() +
   geom_point() +
@@ -239,11 +228,11 @@ data_bank_top8 %>%
        color = "Top 8 Banks Dummy") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("ShareRepurchase_byTop8.pdf")
+ggsave("../Results/ShareRepurchase_byTop8.pdf")
 
 # plot the total dividend and repurchase for the top 25 banks by fyearq
-data_bank_top25 %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top25))) +
+data_top25 %>%
+  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top25_prev_quarter))) +
   geom_line() +
   geom_point() +
   labs(title = "Share Repurchase by Top 25 Banks",
@@ -252,4 +241,65 @@ data_bank_top25 %>%
        color = "Top 25 Banks Dummy") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("ShareRepurchase_byTop25.pdf")
+ggsave("../Results/ShareRepurchase_byTop25.pdf")
+
+### New Plots with Institutional Holdings Overlayed with Total Dividends and Share Repurchase
+
+# keep only those observations with valid institutional holdings (non-NA InstOwn_Perc)
+data_inst <- data %>%
+  filter(!is.na(InstOwn_Perc))
+
+# generate total dividends/repurchase, share repurchase/dividend, and share of firms that issue dividends/repurchase, and InstOwn_Perc
+data_inst1 <- data_inst %>%
+  group_by(fyearq) %>%
+  summarise(total_dividend = sum(dividend, na.rm = TRUE),
+            total_repurchase = sum(repurchase, na.rm = TRUE),
+            total_firms = n(), 
+            total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
+            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE),
+            avg_inst = mean(InstOwn_Perc, na.rm = TRUE))
+
+# plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
+# keep only total dividend and total repurchase
+
+ggplot(data_inst1, aes(x = fyearq)) +
+  geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
+  geom_line(aes(y = total_dividend, color = "Total Dividend")) +
+  geom_line(aes(y = avg_inst * 100, color = "Institutional Ownership")) +
+  scale_y_continuous(
+    name = "Total Amount ($billion)",
+    sec.axis = sec_axis(~./100, name = "Institutional Ownership")
+  ) +
+  labs(color = "Legend") +
+  theme_minimal() +
+  theme(legend.position = "top")
+# Save to Results folder as pdf
+ggsave("../Results/Total_Div_Repur_Inst.pdf")
+
+# Do the same as above but keeping only the top 25 banks as before 
+data_inst_top25 <- data_inst %>%
+  filter(top25_prev_quarter == 1) %>% group_by(fyearq) %>%
+  summarise(total_dividend = sum(dividend, na.rm = TRUE),
+            total_repurchase = sum(repurchase, na.rm = TRUE),
+            total_firms = n(), 
+            total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
+            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE),
+            avg_inst = mean(InstOwn_Perc, na.rm = TRUE))
+
+# plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
+# keep only total dividend and total repurchase
+
+ggplot(data_inst_top25, aes(x = fyearq)) +
+  geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
+  geom_line(aes(y = total_dividend, color = "Total Dividend")) +
+  geom_line(aes(y = avg_inst * 100, color = "Institutional Ownership")) +
+  scale_y_continuous(
+    name = "Total Amount ($billion)",
+    sec.axis = sec_axis(~./100, name = "Institutional Ownership")
+  ) +
+  labs(color = "Legend") +
+  theme_minimal() +
+  theme(legend.position = "top")
+# Save to Results folder as pdf
+ggsave("../Results/Total_Div_Repur_Inst_Top25.pdf")
+
