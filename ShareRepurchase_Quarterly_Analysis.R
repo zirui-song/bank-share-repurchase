@@ -8,6 +8,7 @@ library(readxl)
 library(ggplot2)
 library(patchwork) # To display 2 charts together
 library(hrbrthemes) # For ggplot2 themes
+library(stargazer) # For regression tables
 
 options(scipen = 999)
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
@@ -303,3 +304,42 @@ ggplot(data_inst_top25, aes(x = fyearq)) +
 # Save to Results folder as pdf
 ggsave("../Results/Total_Div_Repur_Inst_Top25.pdf")
 
+### Regressions with data_inst (Institutional Ownership) and Share Repurchase Behavior 
+
+# Method 1: Two regressions in which in the first regression we regress the share repurchase dummy 
+# on the average institutional ownership
+# in the second regression we regress the share repurchase amount on the average institutional ownership 
+# using only the subsample of those banks that issue share repurchase
+
+# drop those with NA assets
+data_inst <- data_inst %>%
+  filter(!is.na(atq))
+
+# Regression 1: Share Repurchase Dummy on Average Institutional Ownership using data_inst with atq and year FE
+reg1 <- lm(repurchase_dummy ~ InstOwn_Perc + atq + factor(fyearq), data = data_inst)
+summary(reg1)
+# Add individual bank FE
+reg1_1 <- lm(repurchase_dummy ~ InstOwn_Perc + atq + factor(fyearq) + factor(tic), data = data_inst)
+summary(reg1_1)
+# Regression 2: Share Repurchase Amount on Average Institutional Ownership using data_inst with atq and year FE
+data_inst_repur <- data_inst %>%
+  filter(repurchase > 0)
+reg2 <- lm(repurchase ~ InstOwn_Perc + atq + factor(fyearq), data = data_inst_repur)
+summary(reg2)
+# Add individual bank FE
+reg2_1 <- lm(repurchase ~ InstOwn_Perc + atq + factor(fyearq) + factor(tic), data = data_inst_repur)
+summary(reg2_1)
+
+# Method 2: Use recursive methods as in CEO Ownership, Leasing, and Debt Financing
+# Hamid Mehran, Robert A. Taggart and David Yermack
+# Financial Management
+# Vol. 28, No. 2 (Summer, 1999), pp. 5-14 (10 pages)
+
+# Basically use the residual of the first regression as an explanatory variable in the second regression 
+# Attach residuals to the data_inst dataset
+data_inst <- data_inst %>%
+  mutate(residuals = residuals(reg1))
+reg3 <- lm(repurchase ~ InstOwn_Perc + atq + factor(fyearq) + residuals, data = data_inst)
+# Use stargarzer to generate regression table and don't show factor variables
+stargazer(reg1, reg1_1, reg2, reg2_1, reg3, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression.txt")
+stargazer(reg3, type = "text", omit = "factor")
