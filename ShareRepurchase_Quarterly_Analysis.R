@@ -21,7 +21,7 @@ rm(list = ls())
 data <- fread("../Data/compustat_quarterly.csv")
 # Put the variable gvkey fyearq fqtr dvpy dividend dvp repurchase repurchase_a repurchase_q in front 
 data <- data %>%
-  select(gvkey, tic, fyearq, fqtr, atq, dvpy, dvp, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm)
+  select(gvkey, tic, fyearq, fqtr, atq, capr1q, dvpy, dvp, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm)
 # note that quarterly dividend is the difference between the current quarter and the previous quarter amount
 # for each given gvkey fyearq
 # generate the quarterly dividend amount
@@ -139,14 +139,14 @@ share_div_repur %>%
 ggsave("../Results/Share_Div_Repur_Banks.pdf")
 
 # Check Trends for Specific Banks 
-# keep only the top 8 biggest banks using tic
+# keep only the Top 6 biggest banks using tic
 data_bb <- data %>%
-  filter(tic %in% c("JPM", "BAC", "C", "WFC", "GS", "MS", "BK", "USB"))
+  filter(tic %in% c("JPM", "BAC", "C", "WFC", "GS", "USB", "PNC", "MS"))
 # list of conm
 data_bb %>%
   select(conm) %>%
   unique()
-# plot the trends again for the sum of repurchase and dividends of top 8 banks
+# plot the trends again for the sum of repurchase and dividends of Top 6 banks
 data2 <- data_bb %>%
   group_by(fyearq) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
@@ -156,20 +156,20 @@ data3 <- data_bb %>%
   group_by(tic, fyearq) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE))
-# plot the times series trend of share repurchase and dividend sums in one figure for the top 8 banks
+# plot the times series trend of share repurchase and dividend sums in one figure for the Top 6 banks
 data3 %>%
   ggplot(aes(x = fyearq, y = total_repurchase, color = factor(tic))) +
   geom_line() +
   geom_point() +
-  labs(title = "Share Repurchase by Top 8 Banks",
+  labs(title = "Share Repurchase by Top 6 Banks",
        x = "Year",
        y = "Total Share Repurchase ($billion)",
        color = "Bank Ticker") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("../Results/ShareRepurchase_Top8.pdf")
+ggsave("../Results/ShareRepurchase_Top6.pdf")
 
-# plot the time series trend of share repurchase and dividend sums in one figure for the top 8 banks
+# plot the time series trend of share repurchase and dividend sums in one figure for the Top 6 banks
 # Use legend to show that one series is total_dividend, the other is total repurchase
 # reshape to long format first
 data2 <- data2 %>%
@@ -178,17 +178,17 @@ data2 %>%
   ggplot(aes(x = fyearq, y = value, color = method)) +
   geom_line() +
   geom_point() +
-  labs(title = "Dividends and Share Repurchase by Top 8 Banks",
+  labs(title = "Dividends and Share Repurchase by Top 6 Banks",
        x = "Year",
        y = "Total Dividends and Share Repurchase ($billion)",
        color = "Method") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("../Results/Dividend_ShareRepurchase_Top8.pdf")
+ggsave("../Results/Dividend_ShareRepurchase_Top6.pdf")
 
-# Generate dummy variable for the top 8 banks "JPM", "BAC", "C", "WFC", "GS", "MS", "BK", "USB"
+# Generate dummy variable for the Top 6 banks "JPM", "BAC", "C", "WFC", "GS", "USB", "PNC", "MS" -- Note that GS and MS aren't here actually because they are investment banks
 data <- data %>%
-  mutate(top8 = ifelse(tic %in% c("JPM", "BAC", "C", "WFC", "GS", "MS", "BK", "USB"), 1, 0))
+  mutate(Top6 = ifelse(tic %in% c("JPM", "BAC", "C", "WFC", "GS", "USB", "PNC", "MS"), 1, 0))
 
 # Generate dummy variable for the top 25 banks in each fyearq fqtr by atq of the quarter before
 data <- data %>%
@@ -202,9 +202,9 @@ data <- data %>%
   mutate(top25_prev_quarter = lag(top25, 1)) %>%
   ungroup() %>%
   mutate(top25_prev_quarter = ifelse(is.na(top25_prev_quarter), 0, top25_prev_quarter))
-# generate total dividend and repurchase for the top 8 banks by fyearq
-data_top8 <- data %>%
-  group_by(fyearq, top8) %>%
+# generate total dividend and repurchase for the Top 6 banks by fyearq
+data_Top6 <- data %>%
+  group_by(fyearq, Top6) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE),
             total_firms = n(), 
@@ -218,18 +218,18 @@ data_top25 <- data %>%
             total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
             total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
 
-# plot the total dividend and repurchase for the top 8 banks by fyearq
-data_top8 %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top8))) +
+# plot the total dividend and repurchase for the Top 6 banks by fyearq
+data_Top6 %>%
+  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(Top6))) +
   geom_line() +
   geom_point() +
-  labs(title = "Share Repurchase by Top 8 Banks",
+  labs(title = "Share Repurchase by Top 6 Banks",
        x = "Year",
        y = "Total Share Repurchase ($billion)",
-       color = "Top 8 Banks Dummy") +
+       color = "Top 6 Banks Dummy") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("../Results/ShareRepurchase_byTop8.pdf")
+ggsave("../Results/ShareRepurchase_byTop6.pdf")
 
 # plot the total dividend and repurchase for the top 25 banks by fyearq
 data_top25 %>%
@@ -244,11 +244,11 @@ data_top25 %>%
   theme(legend.position = "top")
 ggsave("../Results/ShareRepurchase_byTop25.pdf")
 
-### New Plots with Institutional Holdings Overlayed with Total Dividends and Share Repurchase
+### New Plots with Institutional Holdings and Capr1 Ratio Overlayed with Total Dividends and Share Repurchase
 
 # keep only those observations with valid institutional holdings (non-NA InstOwn_Perc)
 data_inst <- data %>%
-  filter(!is.na(InstOwn_Perc))
+  filter(!is.na(InstOwn_Perc)) %>% filter(!is.na(capr1q))
 
 # generate total dividends/repurchase, share repurchase/dividend, and share of firms that issue dividends/repurchase, and InstOwn_Perc
 data_inst1 <- data_inst %>%
@@ -258,7 +258,8 @@ data_inst1 <- data_inst %>%
             total_firms = n(), 
             total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
             total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE),
-            avg_inst = mean(InstOwn_Perc, na.rm = TRUE))
+            avg_inst = mean(InstOwn_Perc, na.rm = TRUE),
+            avg_capr1q = mean(capr1q, na.rm = TRUE))
 
 # plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
 # keep only total dividend and total repurchase
@@ -267,9 +268,10 @@ ggplot(data_inst1, aes(x = fyearq)) +
   geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
   geom_line(aes(y = total_dividend, color = "Total Dividend")) +
   geom_line(aes(y = avg_inst * 100, color = "Institutional Ownership")) +
+  geom_line(aes(y = avg_capr1q, color = "Capr1 Ratio")) +
   scale_y_continuous(
     name = "Total Amount ($billion)",
-    sec.axis = sec_axis(~./100, name = "Institutional Ownership")
+    sec.axis = sec_axis(~./100, name = "Ratio")
   ) +
   labs(color = "Legend") +
   theme_minimal() +
@@ -285,7 +287,8 @@ data_inst_top25 <- data_inst %>%
             total_firms = n(), 
             total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
             total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE),
-            avg_inst = mean(InstOwn_Perc, na.rm = TRUE))
+            avg_inst = mean(InstOwn_Perc, na.rm = TRUE),
+            avg_capr1q = mean(capr1q, na.rm = TRUE))
 
 # plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
 # keep only total dividend and total repurchase
@@ -294,9 +297,10 @@ ggplot(data_inst_top25, aes(x = fyearq)) +
   geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
   geom_line(aes(y = total_dividend, color = "Total Dividend")) +
   geom_line(aes(y = avg_inst * 100, color = "Institutional Ownership")) +
+  geom_line(aes(y = avg_capr1q, color = "Capr1 Ratio")) +
   scale_y_continuous(
     name = "Total Amount ($billion)",
-    sec.axis = sec_axis(~./100, name = "Institutional Ownership")
+    sec.axis = sec_axis(~./100, name = "Ratio")
   ) +
   labs(color = "Legend") +
   theme_minimal() +
@@ -316,18 +320,18 @@ data_inst <- data_inst %>%
   filter(!is.na(atq))
 
 # Regression 1: Share Repurchase Dummy on Average Institutional Ownership using data_inst with atq and year FE
-reg1 <- lm(repurchase_dummy ~ InstOwn_Perc + atq + factor(fyearq), data = data_inst)
+reg1 <- lm(repurchase_dummy ~ InstOwn_Perc + atq + capr1q + factor(fyearq), data = data_inst)
 summary(reg1)
 # Add individual bank FE
-reg1_1 <- lm(repurchase_dummy ~ InstOwn_Perc + atq + factor(fyearq) + factor(tic), data = data_inst)
+reg1_1 <- lm(repurchase_dummy ~ InstOwn_Perc + atq + capr1q + factor(fyearq) + factor(tic), data = data_inst)
 summary(reg1_1)
 # Regression 2: Share Repurchase Amount on Average Institutional Ownership using data_inst with atq and year FE
 data_inst_repur <- data_inst %>%
   filter(repurchase > 0)
-reg2 <- lm(repurchase ~ InstOwn_Perc + atq + factor(fyearq), data = data_inst_repur)
+reg2 <- lm(repurchase ~ InstOwn_Perc + atq + capr1q + factor(fyearq), data = data_inst_repur)
 summary(reg2)
 # Add individual bank FE
-reg2_1 <- lm(repurchase ~ InstOwn_Perc + atq + factor(fyearq) + factor(tic), data = data_inst_repur)
+reg2_1 <- lm(repurchase ~ InstOwn_Perc + atq + capr1q + factor(fyearq) + factor(tic), data = data_inst_repur)
 summary(reg2_1)
 
 # Method 2: Use recursive methods as in CEO Ownership, Leasing, and Debt Financing
@@ -335,11 +339,14 @@ summary(reg2_1)
 # Financial Management
 # Vol. 28, No. 2 (Summer, 1999), pp. 5-14 (10 pages)
 
-# Basically use the residual of the first regression as an explanatory variable in the second regression 
-# Attach residuals to the data_inst dataset
+# Basically use the predicted value of the first regression as an explanatory variable in the second regression 
+# Attach predicted to the data_inst dataset
 data_inst <- data_inst %>%
-  mutate(residuals = residuals(reg1))
-reg3 <- lm(repurchase ~ InstOwn_Perc + atq + factor(fyearq) + residuals, data = data_inst)
-# Use stargarzer to generate regression table and don't show factor variables
+  mutate(predicted = predict(reg1))
+reg3 <- lm(repurchase ~ InstOwn_Perc + atq + capr1q +  factor(fyearq) + predicted, data = data_inst)
+# Use stargazer to generate regression table and don't show factor variables
 stargazer(reg1, reg1_1, reg2, reg2_1, reg3, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression.txt")
 stargazer(reg3, type = "text", omit = "factor")
+
+reg4 <- lm(repurchase ~ InstOwn_Perc + atq + factor(fyearq) + predicted, data = data_inst)
+summary(reg4)
