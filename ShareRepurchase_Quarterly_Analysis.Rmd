@@ -62,6 +62,11 @@ data_tr <- data_tr %>%
   mutate(fyearq = year(rdate),
          fqtr = ifelse(month(rdate) %in% 1:3, 1, ifelse(month(rdate) %in% 4:6, 2, ifelse(month(rdate) %in% 7:9, 3, 4)))
   )
+
+# Keep only those with exchange code == "A"
+#data_tr <- data_tr %>%
+#  filter(exchcd == "A")
+
 # check if ticker fyearq fqtr is unique in the dataset
 data_tr %>%
   group_by(ticker, fyearq, fqtr) %>%
@@ -340,21 +345,24 @@ ggsave("../Results/Total_Div_Repur_Inst_Top25.pdf")
 
 # change institutional ownership to percentage
 data_inst <- data_inst %>%
-  mutate(InstOwn_Perc = InstOwn_Perc * 100)
+  mutate(capr1q = capr1q / 100)
 ### Summary Statistics
+
+# make sure the panel is balanced, ie. there is no gap between year quarter; fill in the missing year quarters with NA values
+data_inst <- data_inst %>%
+  complete(fyearq, nesting(fqtr, tic))
+
 # Generate change in institutional ownership as the difference between current period and last period ownership percentage
 data_inst <- data_inst %>%
   group_by(tic) %>%
   mutate(InstOwn_Perc_Lag = lag(InstOwn_Perc)) %>%
   ungroup() %>%
-  mutate(InstOwn_Perc_Lag = ifelse(is.na(InstOwn_Perc_Lag), 0, InstOwn_Perc_Lag)) %>%
+  #mutate(InstOwn_Perc_Lag = ifelse(is.na(InstOwn_Perc_Lag), 0, InstOwn_Perc_Lag)) %>%
   mutate(Delta_Institutional_Ownership = InstOwn_Perc - InstOwn_Perc_Lag)
 # Generate lagged variable for delta institutional ownership
 data_inst <- data_inst %>%
   group_by(tic) %>%
-  mutate(Lag_Delta_Institutional_Ownership = lag(Delta_Institutional_Ownership)) %>%
-  ungroup() %>%
-  mutate(Lag_Delta_Institutional_Ownership = ifelse(is.na(Lag_Delta_Institutional_Ownership), 0, Lag_Delta_Institutional_Ownership))
+  mutate(Lag_Delta_Institutional_Ownership = lag(Delta_Institutional_Ownership)) 
 
 # Rename the variables to make them more readable
 data_inst <- data_inst %>%
@@ -375,12 +383,25 @@ data_inst <- data_inst %>%
 data_inst <- as.data.frame(data_inst)
 # check if data_inst is a data frame
 is.data.frame(data_inst)
+
+# drop if we have NA in the variables
+data_inst <- data_inst %>%
+  drop_na(ShareRepurchase_Dummy, ShareRepurchase_Amount, Total_Assets, Tier1Capital_Ratio, Institutional_Ownership, Delta_Institutional_Ownership)
 ```
 
 ```{r}
 summary(data_inst[c("ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Delta_Institutional_Ownership")], digits = 1)
 # output summary table to text file without using stargazer where variables are row names and columns are statistics including mean, max, min, etc.
-# calculate summary stats for above variables
+# calculate summary stats for above variables (drop if we have NA)
+# winsorize total assets and tier1 capital ratio at 1% and 99% quantiles and institutional ownership variables at 1% and 99% too
+data_inst <- data_inst %>%
+  mutate(Total_Assets = ifelse(Total_Assets < quantile(Total_Assets, 0.01), quantile(Total_Assets, 0.01), ifelse(Total_Assets > quantile(Total_Assets, 0.99), quantile(Total_Assets, 0.99), Total_Assets)),
+         Tier1Capital_Ratio = ifelse(Tier1Capital_Ratio < quantile(Tier1Capital_Ratio, 0.01), quantile(Tier1Capital_Ratio, 0.01), ifelse(Tier1Capital_Ratio > quantile(Tier1Capital_Ratio, 0.99), quantile(Tier1Capital_Ratio, 0.99), Tier1Capital_Ratio)),
+         Institutional_Ownership = ifelse(Institutional_Ownership < quantile(Institutional_Ownership, 0.01), quantile(Institutional_Ownership, 0.01), ifelse(Institutional_Ownership > quantile(Institutional_Ownership, 0.99), quantile(Institutional_Ownership, 0.99), Institutional_Ownership)),
+         Delta_Institutional_Ownership = ifelse(Delta_Institutional_Ownership < quantile(Delta_Institutional_Ownership, 0.01), quantile(Delta_Institutional_Ownership, 0.01), ifelse(Delta_Institutional_Ownership > quantile(Delta_Institutional_Ownership, 0.99), quantile(Delta_Institutional_Ownership, 0.99), Delta_Institutional_Ownership)),
+         ShareRepurchase_Amount = ifelse(ShareRepurchase_Amount < quantile(ShareRepurchase_Amount, 0.01), quantile(ShareRepurchase_Amount, 0.01), ifelse(ShareRepurchase_Amount > quantile(ShareRepurchase_Amount, 0.99), quantile(ShareRepurchase_Amount, 0.99), ShareRepurchase_Amount))
+         )
+
 sumstat <- data.frame(
   Variable = c("ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Delta_Institutional_Ownership"),
   Mean = c(mean(data_inst$ShareRepurchase_Dummy), mean(data_inst$ShareRepurchase_Amount), mean(data_inst$Total_Assets), mean(data_inst$Tier1Capital_Ratio), mean(data_inst$Institutional_Ownership), mean(data_inst$Delta_Institutional_Ownership)),
@@ -396,24 +417,46 @@ write.table(sumstat, "../Results/ShareRepurchase_Summary.txt", sep = "\t", row.n
 ```
 
 ```{r}
+# Order data by tic bank-name year quarter assets tier1 ratio institutional ownership, delta institution ownership, share repurchase dummy, and share repurchase amount
+data_inst_1 <- data_inst %>%
+  select(tic, conm, fyearq, fqtr, Total_Assets, Tier1Capital_Ratio, Institutional_Ownership, Lag_Institutional_Ownership, Delta_Institutional_Ownership, ShareRepurchase_Dummy, ShareRepurchase_Amount)
+
+# plot the histogram of the variables above
+data_inst_1 %>%
+  gather(key = "variable", value = "value", -tic, -conm, -fyearq, -fqtr) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~variable, scales = "free") +
+  labs(title = "Histogram of Share Repurchase Variables",
+       x = "Value",
+       y = "Frequency")
+```
+
+```{r}
 # Method 1: Two regressions in which in the first regression we regress the share repurchase dummy 
 # on the average institutional ownership
 # in the second regression we regress the share repurchase amount on the average institutional ownership 
 # using only the subsample of those banks that issue share repurchase
 
-# Regression 1: Share Repurchase Dummy on Average Institutional Ownership using data_inst with atq and year FE (probit)
-reg1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(fyearq), family = binomial(link = "probit"), data = data_inst)
+# Regression 1: Share Repurchase Dummy on Average Institutional Ownership using data_inst with atq and year-quarter FE (probit)
+# generate a year-quarter variable from fyearq and fqtr
+data_inst <- data_inst %>%
+  mutate(fyearq = as.factor(fyearq),
+         yearq = paste(fyearq, fqtr, sep = "q")) %>% arrange(tic, yearq)
+
+reg1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
 summary(reg1)
 # Logit
-reg1_1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(fyearq), family = binomial(link = "logit"), data = data_inst)
+reg1_1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
 summary(reg1_1)
 ```
-
 ```{r}
-# Get average marginal effects
-library(margins)
-margins(reg1)
-margins(reg1_1)
+# Check for association between main variables
+cor(data_inst[c("ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Delta_Institutional_Ownership")], use = "complete.obs")
+
+# Check for coefficients of the probit model with no Institutional Ownership
+reg1_no_inst <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(tic) + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+summary(reg1_no_inst)
 ```
 
 ```{r}
@@ -421,7 +464,7 @@ margins(reg1_1)
 # Regression 2: Share Repurchase Amount on Average Institutional Ownership using data_inst with atq and year FE
 data_inst_repur <- data_inst %>%
   filter(ShareRepurchase_Amount > 0)
-reg2 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(fyearq), data = data_inst_repur)
+reg2 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), data = data_inst_repur)
 summary(reg2)
 
 # Method 2: Use recursive methods as in CEO Ownership, Leasing, and Debt Financing
@@ -433,8 +476,22 @@ summary(reg2)
 # Attach predicted to the data_inst dataset
 data_inst <- data_inst %>%
   mutate(predicted = predict(reg1))
-reg3 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + predicted + factor(fyearq), data = data_inst)
+reg3 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + predicted + factor(yearq), data = data_inst)
 # Use stargazer to generate regression table and don't show factor variables
 stargazer(reg1, reg1_1, reg2, reg3, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression.txt")
+```
 
+```{r}
+# Get average marginal effects
+library(margins)
+library(sandwich)
+library(lmtest)
+
+cl_ccov_mat1 <- vcovCL(reg1, type = "HC1", cluster = data_inst$yearq)
+margins(reg1, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Total_Assets = mean(data_inst$Total_Assets), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat1, variables = c("Lag_Institutional_Ownership", "Total_Assets", "Tier1Capital_Ratio"))
+cl_ccov_mat2 <- vcovCL(reg1_1, type = "HC1", cluster = data_inst$yearq)
+margins(reg1_1, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Total_Assets = mean(data_inst$Total_Assets), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat2, variables = c("Lag_Institutional_Ownership", "Total_Assets", "Tier1Capital_Ratio"))
+cl_ccov_mat3 <- vcovCL(reg2, type = "HC1", cluster = data_inst_repur$yearq)
+reg2coeffs_cl <- coeftest(reg2, vcov = cl_ccov_mat3)
+reg2coeffs_cl
 ```
