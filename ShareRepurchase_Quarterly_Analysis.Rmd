@@ -30,10 +30,10 @@ rm(list = ls())
 
 # Generate Dividend and Repurchase for each gvkey fyearq fqtr
 
-data <- fread("../Data/compustat_quarterly.csv")
+compustat <- fread("../Data/compustat_quarterly.csv")
 # Put the variable gvkey fyearq fqtr dvpy dividend dvp repurchase repurchase_a repurchase_q in front 
-data <- data %>%
-  select(gvkey, tic, fyearq, fqtr, atq, capr1q, dvpy, dvp, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm)
+data <- compustat %>%
+  select(gvkey, tic, fyearq, fqtr, atq, capr1q, niq, ibq, req, dvpy, dvp, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm)
 # note that quarterly dividend is the difference between the current quarter and the previous quarter amount
 # for each given gvkey fyearq
 # generate the quarterly dividend amount
@@ -217,12 +217,25 @@ data <- data %>%
   mutate(rank = rank(-atq)) %>%
   ungroup() %>%
   mutate(top25 = ifelse(rank <= 25, 1, 0))
+# Generate dummy variable for the top 50 banks in each fyearq fqtr by atq of the quarter before
+data <- data %>%
+  group_by(fyearq, fqtr) %>%
+  mutate(rank = rank(-atq)) %>%
+  ungroup() %>%
+  mutate(top50 = ifelse(rank <= 50, 1, 0))
 # generate new variable top25_prev_quarter that equals 1 if the bank is in the top 25 in the previous quarter
 data <- data %>%
   group_by(tic) %>%
   mutate(top25_prev_quarter = lag(top25, 1)) %>%
   ungroup() %>%
   mutate(top25_prev_quarter = ifelse(is.na(top25_prev_quarter), 0, top25_prev_quarter))
+# generate new variable top50_prev_quarter that equals 1 if the bank is in the top 50 in the previous quarter
+data <- data %>%
+  group_by(tic) %>%
+  mutate(top50_prev_quarter = lag(top50, 1)) %>%
+  ungroup() %>%
+  mutate(top50_prev_quarter = ifelse(is.na(top50_prev_quarter), 0, top50_prev_quarter))
+
 # generate total dividend and repurchase for the Top 6 banks by fyearq
 data_Top6 <- data %>%
   group_by(fyearq, Top6) %>%
@@ -457,17 +470,17 @@ data_inst <- data_inst %>%
 data_inst <- data_inst %>%
   mutate(Size_Quintile = ntile(Total_Assets, 5))
 
-reg1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
 summary(reg1)
 # Logit
-reg1_1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
+reg1_1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
 summary(reg1_1)
 
 ### Dividend
-reg1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
 summary(reg1_div)
 # Logit
-reg1_1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
+reg1_1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
 summary(reg1_1_div)
 ```
 ```{r}
@@ -503,9 +516,9 @@ library(margins)
 library(sandwich)
 library(lmtest)
 
-cl_ccov_mat_check1 <- vcovCL(reg1_quintile, type = "HC1", cluster = data_inst$yearq)
+cl_ccov_mat_check1 <- vcovCL(reg1_quintile_div, type = "HC1", cluster = data_inst$yearq)
 margins(reg1_quintile_div, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Size_Quintile = mean(data_inst$Size_Quintile), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat_check1, variables = c("Lag_Institutional_Ownership", "Size_Quintile", "Tier1Capital_Ratio"))
-cl_ccov_mat_check2 <- vcovCL(reg1_1_quintile, type = "HC1", cluster = data_inst$yearq)
+cl_ccov_mat_check2 <- vcovCL(reg1_1_quintile_div, type = "HC1", cluster = data_inst$yearq)
 margins(reg1_1_quintile_div, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Size_Quintile = mean(data_inst$Size_Quintile), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat_check2, variables = c("Lag_Institutional_Ownership", "Size_Quintile", "Tier1Capital_Ratio"))
 ```
 
@@ -546,4 +559,139 @@ margins(reg1_1, data = data_inst, at = list(Lag_Institutional_Ownership = mean(d
 cl_ccov_mat3 <- vcovCL(reg2, type = "HC1", cluster = data_inst_repur$yearq)
 reg2coeffs_cl <- coeftest(reg2, vcov = cl_ccov_mat3)
 reg2coeffs_cl
+```
+
+```{r}
+# New Analysis Split by Large Banks (Top 50) and Regional Banks (Those with assets in the next 100 banks)
+# Generate dummy variable for the next 100 banks in each fyearq fqtr by atq of the quarter before
+data <- data %>%
+  group_by(fyearq, fqtr) %>%
+  mutate(rank = rank(-atq)) %>%
+  ungroup() %>%
+  mutate(next100 = ifelse(rank > 50 & rank <= 150, 1, 0))
+# generate new variable next100_prev_quarter that equals 1 if the bank is in the next 100 in the previous quarter
+data <- data %>%
+  group_by(tic) %>%
+  mutate(next100_prev_quarter = lag(next100, 1)) %>%
+  ungroup() %>%
+  mutate(next100_prev_quarter = ifelse(is.na(next100_prev_quarter), 0, next100_prev_quarter))
+# keep if only in the top 50 or next 100 in previous quarter
+data_top150 <- data %>%
+  filter(top50_prev_quarter == 1 | next100_prev_quarter == 1)
+# Generate plots of share repurchase and dividend for the Top 50 banks and the next 100 banks in the same figure
+data_top150_plot <- data_top150 %>%
+  group_by(fyearq, top50_prev_quarter) %>%
+  summarise(total_dividend = sum(dividend, na.rm = TRUE),
+            total_repurchase = sum(repurchase, na.rm = TRUE),
+            total_firms = n(), 
+            total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
+            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
+# plot the times series trend of share repurchase and dividend sums in one figure for the Top 50 banks and the next 100 banks
+data_top150_plot %>%
+  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top50_prev_quarter))) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Share Repurchase by Top 50 and Regional Banks",
+       x = "Year",
+       y = "Total Share Repurchase ($billion)",
+       color = "Top 50 Banks Dummy") +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+```{r}
+# Use the Top 10 banks in each year quarter as the Top 10 banks
+data <- data %>%
+  group_by(fyearq, fqtr) %>%
+  mutate(rank = rank(-atq)) %>%
+  ungroup() %>%
+  mutate(top10 = ifelse(rank <= 10, 1, 0))
+# generate new variable top10_prev_quarter that equals 1 if the bank is in the top 10 in the previous quarter
+data <- data %>%
+  group_by(tic) %>%
+  mutate(top10_prev_quarter = lag(top10, 1)) %>%
+  ungroup() %>%
+  mutate(top10_prev_quarter = ifelse(is.na(top10_prev_quarter), 0, top10_prev_quarter))
+# Keep only the top 50 banks in the previous quarter
+data_top50 <- data %>%
+  filter(top50_prev_quarter == 1)
+
+# Generate plots of share repurchase and dividend for the Top 10 banks and the next 40 banks in the same figure (including tier 1 capital ratio and assets)
+data_top50_plot <- data_top50 %>%
+  group_by(fyearq, top10_prev_quarter) %>%
+  summarise(total_dividend = sum(dividend, na.rm = TRUE),
+            total_repurchase = sum(repurchase, na.rm = TRUE),
+            total_firm_quarters = n(), 
+            total_dividend_firm_quarters = sum(dividend_dummy, na.rm = TRUE),
+            total_repurchase_firm_quarters = sum(repurchase_dummy, na.rm = TRUE),
+            avg_capr1q = mean(capr1q, na.rm = TRUE),
+            avg_atq = mean(atq, na.rm = TRUE),
+            avg_net_income = mean(niq, na.rm = TRUE),
+            avg_retained_earnings = mean(req, na.rm = TRUE))
+# drop if any variables are missing
+data_top50_plot <- data_top50_plot %>%
+  drop_na(total_dividend, total_repurchase, avg_capr1q, avg_atq, avg_net_income, avg_retained_earnings)
+
+# divide net_income and retained_earnings by 1000 to get to billions
+data_top50_plot <- data_top50_plot %>%
+  mutate(avg_net_income = avg_net_income / 1000,
+         avg_retained_earnings = avg_retained_earnings / 1000)
+# save the above dataset to csv
+write.csv(data_top50_plot, "../Results/ShareRepurchase_byTop50.csv")
+
+# plot the times series trend of share repurchase and dividend sums in one figure for the Top 10 banks and the next 40 banks
+data_top50_plot %>%
+  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top10_prev_quarter))) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Share Repurchase by Top 10 and Next 40 Banks",
+       x = "Year",
+       y = "Total Share Repurchase ($billion)",
+       color = "Top 10 Banks Dummy") +
+  theme_minimal() +
+  theme(legend.position = "top")
+# save to pdf
+ggsave("../Results/ShareRepurchase_byTop50.pdf")
+data_top50_plot %>%
+  ggplot(aes(x = fyearq, y = total_dividend, color = factor(top10_prev_quarter))) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Dividend Payout by Top 10 and Next 40 Banks",
+       x = "Year",
+       y = "Total Dividend ($billion)",
+       color = "Top 10 Banks Dummy") +
+  theme_minimal() +
+  theme(legend.position = "top")
+# save to pdf
+ggsave("../Results/Dividend_byTop50.pdf")
+```
+
+```{r}
+data_top50_plot_top10 <- data_top50_plot %>%
+  filter(top10_prev_quarter == 1)
+ggplot(data_top50_plot_top10, aes(x = fyearq)) +
+  geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
+  geom_line(aes(y = total_dividend, color = "Total Dividend")) +
+  geom_line(aes(y = avg_capr1q, color = "Capr1 Ratio")) +
+  scale_y_continuous(
+    name = "Total Amount ($billion)",
+    sec.axis = sec_axis(~./100, name = "Ratio")
+  ) +
+  labs(color = "Legend") +
+  theme_minimal() +
+  theme(legend.position = "top")
+# Save to Results folder as pdf
+data_top50_plot_next40 <- data_top50_plot %>%
+  filter(top10_prev_quarter == 0)
+ggplot(data_top50_plot_next40, aes(x = fyearq)) +
+  geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
+  geom_line(aes(y = total_dividend, color = "Total Dividend")) +
+  geom_line(aes(y = avg_capr1q, color = "Capr1 Ratio")) +
+  scale_y_continuous(
+    name = "Total Amount ($billion)",
+    sec.axis = sec_axis(~./100, name = "Ratio")
+  ) +
+  labs(color = "Legend") +
+  theme_minimal() +
+  theme(legend.position = "top")
 ```
