@@ -33,7 +33,7 @@ rm(list = ls())
 compustat <- fread("../Data/compustat_quarterly.csv")
 # Put the variable gvkey fyearq fqtr dvpy dividend dvp repurchase repurchase_a repurchase_q in front 
 data <- compustat %>%
-  select(gvkey, tic, fyearq, fqtr, atq, capr1q, niq, ibq, req, dvpy, dvp, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm)
+  dplyr::select(gvkey, tic, fyearq, fqtr, atq, capr1q, niq, ibq, req, dvpy, dvp, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm)
 # note that quarterly dividend is the difference between the current quarter and the previous quarter amount
 # for each given gvkey fyearq
 # generate the quarterly dividend amount
@@ -63,10 +63,6 @@ data_tr <- data_tr %>%
          fqtr = ifelse(month(rdate) %in% 1:3, 1, ifelse(month(rdate) %in% 4:6, 2, ifelse(month(rdate) %in% 7:9, 3, 4)))
   )
 
-# Keep only those with exchange code == "A"
-#data_tr <- data_tr %>%
-#  filter(exchcd == "A")
-
 # check if ticker fyearq fqtr is unique in the dataset
 data_tr %>%
   group_by(ticker, fyearq, fqtr) %>%
@@ -82,7 +78,7 @@ setnames(data_tr, "ticker", "tic")
 data <- merge(data, data_tr, by = c("tic", "fyearq", "fqtr"), all.x = TRUE)
 # check if tic fyearq fqtr is key
 data %>%
-  select(tic, fyearq, fqtr) %>%
+  dplyr::select(tic, fyearq, fqtr) %>%
   unique()
 
 # replace NA to 0 for share repurchase and dividend
@@ -107,9 +103,32 @@ data <- data %>%
 data <- data %>%
   mutate(dividend_dummy = ifelse(dividend > 0, 1, 0))
 
+# keep only those with valid ticker (drop those with "")
+data <- data %>%
+  filter(tic != "")
+```
+
+```{r}
+# loan inflation data to adjust for inflation
+inflation <- fread("../Data/cpi_quarterly_1988to2023.csv")
+colnames(inflation) <- c("date", "cpi")
+inflation <- inflation %>%
+  mutate(fyearq = year(date),
+         fqtr = quarter(date))
+# merge the inflation data with the data
+data_cpi_adjusted <- merge(data, inflation, by = c("fyearq", "fqtr"), all.x = TRUE)
+# adjust the repurchase and dividend and asset for inflation
+data_cpi_adjusted <- data_cpi_adjusted %>%
+  mutate(repurchase = repurchase / cpi * 100,
+         dividend = dividend / cpi * 100,
+         atq = atq / cpi * 100)
+```
+
+```{r}
+# Figure 1: General Trends of Share Repurchase/Dividend Payout from 1988-current
 # Generate the total sum of dividends and repurchases for each fyearq-fqtr
 # as well as the total number of firms that issues dividends or repurchase in that year-quarter
-data1 <- data %>%
+data1 <- data_cpi_adjusted %>%
   group_by(fyearq) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE),
@@ -117,13 +136,9 @@ data1 <- data %>%
             total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
             total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE),
             )
-
-```
-
-```{r}
 # plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
 # keep only total dividend and total repurchase
-total_div_repur <- select(data1, c('fyearq','total_dividend','total_repurchase')) %>%
+total_div_repur <- dplyr::select(data1, c('fyearq','total_dividend','total_repurchase')) %>%
   gather(key = "method", value = "value", -fyearq)
 total_div_repur %>%
   ggplot(aes(x = fyearq, y = value, color = method)) +
@@ -144,7 +159,7 @@ data1 <- data1 %>%
   mutate(share_dividend_firms = total_dividend_firms / total_firms,
          share_repurchase_firms = total_repurchase_firms / total_firms)
 
-share_div_repur <- select(data1, c('fyearq','share_dividend_firms','share_repurchase_firms')) %>%
+share_div_repur <- dplyr::select(data1, c('fyearq','share_dividend_firms','share_repurchase_firms')) %>%
   gather(key = "method", value = "value", -fyearq)
 share_div_repur %>%
   ggplot(aes(x = fyearq, y = value, color = method)) +
@@ -158,143 +173,70 @@ share_div_repur %>%
   theme(legend.position = "top")
 # save to Results folder as pdf
 ggsave("../Results/Share_Div_Repur_Banks.pdf")
+```
 
-# Check Trends for Specific Banks 
-# keep only the Top 6 biggest banks using tic
-data_bb <- data %>%
-  filter(tic %in% c("JPM", "BAC", "C", "WFC", "GS", "USB", "PNC", "MS"))
-# list of conm
-data_bb %>%
-  select(conm) %>%
-  unique()
-# plot the trends again for the sum of repurchase and dividends of Top 6 banks
-data2 <- data_bb %>%
-  group_by(fyearq) %>%
+```{r}
+# Generate categorial variable for banks larger than $700 billion in assets, between $100 billion and $700 billion, and between $100 billion and $10 billion
+data_final <- data_cpi_adjusted %>% filter(atq > 10)
+data_final <- data_final %>%
+  mutate(size = ifelse(atq > 700, 3, ifelse(atq > 100, 2, 1)))
+
+# generate new variable size_prev_quarter 
+data_final <- data_final %>%
+  group_by(tic) %>%
+  mutate(size_prev_quarter = lag(size, 1))
+# drop if size_prev_quarter is NA
+data_final <- data_final %>%
+  filter(!is.na(size_prev_quarter))
+# label the size variable
+data_final <- data_final %>%
+  mutate(size_prev_quarter = ifelse(size_prev_quarter == 1, "Regional", ifelse(size_prev_quarter == 2, "Large", "G-SIB")))
+
+# Figure 2: Share Repurchase and Dividend by Buckets of Bank Sizes
+# plot the total dividend and repurchase for different size buckets by fyearq
+data1_size <- data_final %>%
+  group_by(fyearq, size_prev_quarter) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
-            total_repurchase = sum(repurchase, na.rm = TRUE))
+            total_repurchase = sum(repurchase, na.rm = TRUE),
+            total_firms = n(), 
+            total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
+            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE),
+            )
 
-data3 <- data_bb %>%
-  group_by(tic, fyearq) %>%
-  summarise(total_dividend = sum(dividend, na.rm = TRUE),
-            total_repurchase = sum(repurchase, na.rm = TRUE))
-# plot the times series trend of share repurchase and dividend sums in one figure for the Top 6 banks
-data3 %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(tic))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Share Repurchase by Top 6 Banks",
-       x = "Year",
-       y = "Total Share Repurchase ($billion)",
-       color = "Bank Ticker") +
-  theme_minimal() +
-  theme(legend.position = "top")
-ggsave("../Results/ShareRepurchase_Top6.pdf")
-
-# plot the time series trend of share repurchase and dividend sums in one figure for the Top 6 banks
-# Use legend to show that one series is total_dividend, the other is total repurchase
-# reshape to long format first
-data2 <- data2 %>%
-  gather(key = "method", value = "value", -fyearq)
-data2 %>%
+# plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
+# keep only total dividend and total repurchase
+total_div_repur_size <- dplyr::select(data1_size, c('fyearq','total_dividend','total_repurchase', 'size_prev_quarter')) %>%
+  gather(key = "method", value = "value", -fyearq, -size_prev_quarter)
+total_div_repur_size %>%
   ggplot(aes(x = fyearq, y = value, color = method)) +
   geom_line() +
   geom_point() +
-  labs(title = "Dividends and Share Repurchase by Top 6 Banks",
+  facet_wrap(~size_prev_quarter) +
+  labs(title = "Total Dividends and Share Repurchase by Commercial Banks",
        x = "Year",
        y = "Total Dividends and Share Repurchase ($billion)",
        color = "Method") +
   theme_minimal() +
   theme(legend.position = "top")
-ggsave("../Results/Dividend_ShareRepurchase_Top6.pdf")
-
-# Generate dummy variable for the Top 6 banks "JPM", "BAC", "C", "WFC", "GS", "USB", "PNC", "MS" -- Note that GS and MS aren't here actually because they are investment banks
-data <- data %>%
-  mutate(Top6 = ifelse(tic %in% c("JPM", "BAC", "C", "WFC", "GS", "USB", "PNC", "MS"), 1, 0))
-
-# Generate dummy variable for the top 25 banks in each fyearq fqtr by atq of the quarter before
-data <- data %>%
-  group_by(fyearq, fqtr) %>%
-  mutate(rank = rank(-atq)) %>%
-  ungroup() %>%
-  mutate(top25 = ifelse(rank <= 25, 1, 0))
-# Generate dummy variable for the top 50 banks in each fyearq fqtr by atq of the quarter before
-data <- data %>%
-  group_by(fyearq, fqtr) %>%
-  mutate(rank = rank(-atq)) %>%
-  ungroup() %>%
-  mutate(top50 = ifelse(rank <= 50, 1, 0))
-# generate new variable top25_prev_quarter that equals 1 if the bank is in the top 25 in the previous quarter
-data <- data %>%
-  group_by(tic) %>%
-  mutate(top25_prev_quarter = lag(top25, 1)) %>%
-  ungroup() %>%
-  mutate(top25_prev_quarter = ifelse(is.na(top25_prev_quarter), 0, top25_prev_quarter))
-# generate new variable top50_prev_quarter that equals 1 if the bank is in the top 50 in the previous quarter
-data <- data %>%
-  group_by(tic) %>%
-  mutate(top50_prev_quarter = lag(top50, 1)) %>%
-  ungroup() %>%
-  mutate(top50_prev_quarter = ifelse(is.na(top50_prev_quarter), 0, top50_prev_quarter))
-
-# generate total dividend and repurchase for the Top 6 banks by fyearq
-data_Top6 <- data %>%
-  group_by(fyearq, Top6) %>%
-  summarise(total_dividend = sum(dividend, na.rm = TRUE),
-            total_repurchase = sum(repurchase, na.rm = TRUE),
-            total_firms = n(), 
-            total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
-            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
-data_top25 <- data %>%
-  group_by(fyearq, top25_prev_quarter) %>%
-  summarise(total_dividend = sum(dividend, na.rm = TRUE),
-            total_repurchase = sum(repurchase, na.rm = TRUE),
-            total_firms = n(), 
-            total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
-            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
-
-# plot the total dividend and repurchase for the Top 6 banks by fyearq
-data_Top6 %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(Top6))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Share Repurchase by Top 6 Banks",
-       x = "Year",
-       y = "Total Share Repurchase ($billion)",
-       color = "Top 6 Banks Dummy") +
-  theme_minimal() +
-  theme(legend.position = "top")
-ggsave("../Results/ShareRepurchase_byTop6.pdf")
-
-# plot the total dividend and repurchase for the top 25 banks by fyearq
-data_top25 %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top25_prev_quarter))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Share Repurchase by Top 25 Banks",
-       x = "Year",
-       y = "Total Share Repurchase ($billion)",
-       color = "Top 25 Banks Dummy") +
-  theme_minimal() +
-  theme(legend.position = "top")
-ggsave("../Results/ShareRepurchase_byTop25.pdf")
-
-
+# save figure
+ggsave("../Results/Total_Div_Repur_Banks_Size.pdf")
 ```
 
 ```{r}
 ### New Plots with Institutional Holdings and Capr1 Ratio Overlayed with Total Dividends and Share Repurchase
+# Figure 3 AND 4
 
 # keep only those observations with valid institutional holdings (non-NA InstOwn_Perc) and capr1q and asset
-data_inst <- data %>%
+data_final_clean <- data_final %>%
   filter(!is.na(InstOwn_Perc)) %>% filter(!is.na(capr1q)) %>% filter(!is.na(atq))
 # get rid of negative values in capr1q and those with > 100 capr1q
-data_inst <- data_inst %>% filter(capr1q >= 0) %>% filter(capr1q <= 100)
+data_final_clean <- data_final_clean %>% filter(capr1q >= 0) %>% filter(capr1q <= 100)
 # get rid of InstOwn_Perc that are larger than 1
-data_inst <- data_inst %>%
+data_final_clean <- data_final_clean %>%
   filter(InstOwn_Perc <= 1)
 
 # generate total dividends/repurchase, share repurchase/dividend, and share of firms that issue dividends/repurchase, and InstOwn_Perc
-data_inst1 <- data_inst %>%
+data_inst1 <- data_final_clean %>%
   group_by(fyearq) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE),
@@ -322,9 +264,9 @@ ggplot(data_inst1, aes(x = fyearq)) +
 # Save to Results folder as pdf
 ggsave("../Results/Total_Div_Repur_Inst.pdf")
 
-# Do the same as above but keeping only the top 25 banks as before 
-data_inst_top25 <- data_inst %>%
-  filter(top25_prev_quarter == 1) %>% group_by(fyearq) %>%
+# Do the same as above but keeping only the GSIBS/Large/Regional Banks
+data_inst1_size <- data_final_clean %>%
+  group_by(fyearq, size_prev_quarter) %>%
   summarise(total_dividend = sum(dividend, na.rm = TRUE),
             total_repurchase = sum(repurchase, na.rm = TRUE),
             total_firms = n(), 
@@ -336,7 +278,7 @@ data_inst_top25 <- data_inst %>%
 # plot the times series trend of share repurchase and dividend sums in the same ggplot (overlay plot))
 # keep only total dividend and total repurchase
 
-ggplot(data_inst_top25, aes(x = fyearq)) +
+ggplot(data_inst1_size, aes(x = fyearq)) +
   geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
   geom_line(aes(y = total_dividend, color = "Total Dividend")) +
   geom_line(aes(y = avg_inst * 100, color = "Institutional Ownership")) +
@@ -347,9 +289,10 @@ ggplot(data_inst_top25, aes(x = fyearq)) +
   ) +
   labs(color = "Legend") +
   theme_minimal() +
-  theme(legend.position = "top")
+  theme(legend.position = "top") +
+  facet_wrap(~size_prev_quarter)
 # Save to Results folder as pdf
-ggsave("../Results/Total_Div_Repur_Inst_Top25.pdf")
+ggsave("../Results/Total_Div_Repur_Inst_Banks_Size.pdf")
 
 ```
 
@@ -357,33 +300,33 @@ ggsave("../Results/Total_Div_Repur_Inst_Top25.pdf")
 ### Regressions with data_inst (Institutional Ownership) and Share Repurchase Behavior 
 
 # change institutional ownership to percentage
-data_inst <- data_inst %>%
+data_reg_ready <- data_final_clean %>%
   mutate(capr1q = capr1q / 100)
 ### Summary Statistics
 
-# make sure the panel is balanced, ie. there is no gap between year quarter; fill in the missing year quarters with NA values
-data_inst <- data_inst %>%
-  complete(fyearq, nesting(fqtr, tic))
+# make sure the panel is balanced, ie. there is no gap between year quarter; fill in the missing year-quarter with NA values
+data_reg_ready <- complete(data_reg_ready, nesting(fyearq, fqtr, gvkey))
 
 # Generate change in institutional ownership as the difference between current period and last period ownership percentage
-data_inst <- data_inst %>%
+data_reg_ready <- data_reg_ready %>%
   group_by(tic) %>%
   mutate(InstOwn_Perc_Lag = lag(InstOwn_Perc)) %>%
   ungroup() %>%
   #mutate(InstOwn_Perc_Lag = ifelse(is.na(InstOwn_Perc_Lag), 0, InstOwn_Perc_Lag)) %>%
   mutate(Delta_Institutional_Ownership = InstOwn_Perc - InstOwn_Perc_Lag)
 # Generate lagged variable for delta institutional ownership
-data_inst <- data_inst %>%
+data_reg_ready <- data_reg_ready %>%
   group_by(tic) %>%
   mutate(Lag_Delta_Institutional_Ownership = lag(Delta_Institutional_Ownership)) 
 
 # generate dividend dummy
-data_inst <- data_inst %>%
+data_reg_ready <- data_reg_ready %>%
   mutate(Dividend_Dummy = ifelse(dividend > 0, 1, 0))
 
 # Rename the variables to make them more readable
-data_inst <- data_inst %>%
+data_reg_ready <- data_reg_ready %>%
   rename(ShareRepurchase_Amount = repurchase,
+         Dividend_Amount = dividend,
          ShareRepurchase_Dummy = repurchase_dummy,
          Total_Assets = atq,
          Tier1Capital_Ratio = capr1q,
@@ -397,27 +340,27 @@ data_inst <- data_inst %>%
 
 ### Regression Results
 
-data_inst <- as.data.frame(data_inst)
+data_reg_ready <- as.data.frame(data_reg_ready)
 # check if data_inst is a data frame
-is.data.frame(data_inst)
+is.data.frame(data_reg_ready)
 
 # drop if we have NA in the variables
-data_inst <- data_inst %>%
-  drop_na(ShareRepurchase_Dummy, ShareRepurchase_Amount, Total_Assets, Tier1Capital_Ratio, Institutional_Ownership, Delta_Institutional_Ownership)
+data_reg_ready <- data_reg_ready %>%
+  drop_na(ShareRepurchase_Dummy, ShareRepurchase_Amount, Dividend_Amount, Total_Assets, Tier1Capital_Ratio, Institutional_Ownership, Delta_Institutional_Ownership)
 ```
 
 ```{r}
-summary(data_inst[c("Dividend_Dummy", "ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Delta_Institutional_Ownership")], digits = 1)
+summary(data_reg_ready[c("Dividend_Dummy", "ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Delta_Institutional_Ownership")], digits = 1)
 # output summary table to text file without using stargazer where variables are row names and columns are statistics including mean, max, min, etc.
 # calculate summary stats for above variables (drop if we have NA)
 
 # Drop any Delta changes more than 50% or less than -50%
-data_inst <- data_inst %>%
+data_reg_ready <- data_reg_ready %>%
   filter(Delta_Institutional_Ownership <= 0.5) %>%
   filter(Delta_Institutional_Ownership >= -0.5)
 
 # winsorize total assets and tier1 capital ratio at 1% and 99% quantiles and institutional ownership variables at 1% and 99% too
-data_inst <- data_inst %>%
+data_reg_ready <- data_reg_ready %>%
   mutate(Total_Assets = ifelse(Total_Assets < quantile(Total_Assets, 0.01), quantile(Total_Assets, 0.01), ifelse(Total_Assets > quantile(Total_Assets, 0.99), quantile(Total_Assets, 0.99), Total_Assets)),
          Tier1Capital_Ratio = ifelse(Tier1Capital_Ratio < quantile(Tier1Capital_Ratio, 0.01), quantile(Tier1Capital_Ratio, 0.01), ifelse(Tier1Capital_Ratio > quantile(Tier1Capital_Ratio, 0.99), quantile(Tier1Capital_Ratio, 0.99), Tier1Capital_Ratio)),
          Institutional_Ownership = ifelse(Institutional_Ownership < quantile(Institutional_Ownership, 0.01), quantile(Institutional_Ownership, 0.01), ifelse(Institutional_Ownership > quantile(Institutional_Ownership, 0.99), quantile(Institutional_Ownership, 0.99), Institutional_Ownership)),
@@ -425,12 +368,12 @@ data_inst <- data_inst %>%
          )
 
 sumstat <- data.frame(
-  Variable = c("Dividend_Dummy","ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Delta_Institutional_Ownership"),
-  Mean = c(mean(data_inst$Dividend_Dummy), mean(data_inst$ShareRepurchase_Dummy), mean(data_inst$ShareRepurchase_Amount), mean(data_inst$Total_Assets), mean(data_inst$Tier1Capital_Ratio), mean(data_inst$Institutional_Ownership), mean(data_inst$Delta_Institutional_Ownership)),
-  Median = c(median(data_inst$Dividend_Dummy), median(data_inst$ShareRepurchase_Dummy), median(data_inst$ShareRepurchase_Amount), median(data_inst$Total_Assets), median(data_inst$Tier1Capital_Ratio), median(data_inst$Institutional_Ownership), median(data_inst$Delta_Institutional_Ownership)),
-  SD = c(sd(data_inst$Dividend_Dummy), sd(data_inst$ShareRepurchase_Dummy), sd(data_inst$ShareRepurchase_Amount), sd(data_inst$Total_Assets), sd(data_inst$Tier1Capital_Ratio), sd(data_inst$Institutional_Ownership), sd(data_inst$Delta_Institutional_Ownership)),
-  Min = c(min(data_inst$Dividend_Dummy), min(data_inst$ShareRepurchase_Dummy), min(data_inst$ShareRepurchase_Amount), min(data_inst$Total_Assets), min(data_inst$Tier1Capital_Ratio), min(data_inst$Institutional_Ownership), min(data_inst$Delta_Institutional_Ownership)),
-  Max = c(max(data_inst$Dividend_Dummy), max(data_inst$ShareRepurchase_Dummy), max(data_inst$ShareRepurchase_Amount), max(data_inst$Total_Assets), max(data_inst$Tier1Capital_Ratio), max(data_inst$Institutional_Ownership), max(data_inst$Delta_Institutional_Ownership))
+  Variable = c("Dividend_Dummy","ShareRepurchase_Dummy", "Dividend_Amount", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Delta_Institutional_Ownership"),
+  Mean = c(mean(data_reg_ready$Dividend_Dummy), mean(data_reg_ready$ShareRepurchase_Dummy), mean(data_reg_ready$Dividend_Amount), mean(data_reg_ready$ShareRepurchase_Amount), mean(data_reg_ready$Total_Assets), mean(data_reg_ready$Tier1Capital_Ratio), mean(data_reg_ready$Institutional_Ownership), mean(data_reg_ready$Delta_Institutional_Ownership)),
+  Median = c(median(data_reg_ready$Dividend_Dummy), median(data_reg_ready$ShareRepurchase_Dummy), median(data_reg_ready$Dividend_Amount), median(data_reg_ready$ShareRepurchase_Amount), median(data_reg_ready$Total_Assets), median(data_reg_ready$Tier1Capital_Ratio), median(data_reg_ready$Institutional_Ownership), median(data_reg_ready$Delta_Institutional_Ownership)),
+  SD = c(sd(data_reg_ready$Dividend_Dummy), sd(data_reg_ready$ShareRepurchase_Dummy), sd(data_reg_ready$Dividend_Amount), sd(data_reg_ready$ShareRepurchase_Amount), sd(data_reg_ready$Total_Assets), sd(data_reg_ready$Tier1Capital_Ratio), sd(data_reg_ready$Institutional_Ownership), sd(data_reg_ready$Delta_Institutional_Ownership)),
+  Min = c(min(data_reg_ready$Dividend_Dummy), min(data_reg_ready$ShareRepurchase_Dummy), min(data_reg_ready$Dividend_Amount), min(data_reg_ready$ShareRepurchase_Amount), min(data_reg_ready$Total_Assets), min(data_reg_ready$Tier1Capital_Ratio), min(data_reg_ready$Institutional_Ownership), min(data_reg_ready$Delta_Institutional_Ownership)),
+  Max = c(max(data_reg_ready$Dividend_Dummy), max(data_reg_ready$ShareRepurchase_Dummy), max(data_reg_ready$Dividend_Amount), max(data_reg_ready$ShareRepurchase_Amount), max(data_reg_ready$Total_Assets), max(data_reg_ready$Tier1Capital_Ratio), max(data_reg_ready$Institutional_Ownership), max(data_reg_ready$Delta_Institutional_Ownership))
 )
 # print summary stats to console
 print(sumstat)
@@ -439,12 +382,16 @@ write.table(sumstat, "../Results/ShareRepurchase_Summary.txt", sep = "\t", row.n
 ```
 
 ```{r}
+stargazer(sumstat, type = "text", summary = FALSE, digits = 2, out = "../Results/ShareRepurchase_Summary.txt")
+```
+
+```{r}
 # Order data by tic bank-name year quarter assets tier1 ratio institutional ownership, delta institution ownership, share repurchase dummy, and share repurchase amount
-data_inst_1 <- data_inst %>%
-  select(tic, conm, fyearq, fqtr, Total_Assets, Tier1Capital_Ratio, Institutional_Ownership, Lag_Institutional_Ownership, Delta_Institutional_Ownership, ShareRepurchase_Dummy, ShareRepurchase_Amount)
+data_reg_ready_1 <- data_reg_ready %>%
+  dplyr::select(tic, conm, fyearq, fqtr, Total_Assets, Tier1Capital_Ratio, Institutional_Ownership, Lag_Institutional_Ownership, Delta_Institutional_Ownership, ShareRepurchase_Dummy, ShareRepurchase_Amount)
 
 # plot the histogram of the variables above
-data_inst_1 %>%
+data_reg_ready_1 %>%
   gather(key = "variable", value = "value", -tic, -conm, -fyearq, -fqtr) %>%
   ggplot(aes(x = value)) +
   geom_histogram(bins = 30) +
@@ -460,50 +407,48 @@ data_inst_1 %>%
 # in the second regression we regress the share repurchase amount on the average institutional ownership 
 # using only the subsample of those banks that issue share repurchase
 
-# Regression 1: Share Repurchase Dummy on Average Institutional Ownership using data_inst with atq and year-quarter FE (probit)
+# Regression 1: Share Repurchase Dummy on Average Institutional Ownership using data_reg_ready with atq and year-quarter FE (probit)
 # generate a year-quarter variable from fyearq and fqtr
-data_inst <- data_inst %>%
-  mutate(fyearq = as.factor(fyearq),
-         yearq = paste(fyearq, fqtr, sep = "q")) %>% arrange(tic, yearq)
+data_reg_ready <- data_reg_ready %>%
+  mutate(yearq = paste(fyearq, fqtr, sep = "q")) %>% arrange(tic, yearq)
 
 # generate size quintile based on total assets
-data_inst <- data_inst %>%
+data_reg_ready <- data_reg_ready %>%
   mutate(Size_Quintile = ntile(Total_Assets, 5))
 
-reg1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
 summary(reg1)
 # Logit
-reg1_1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
+reg1_1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_reg_ready)
 summary(reg1_1)
 
 ### Dividend
-reg1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
 summary(reg1_div)
 # Logit
-reg1_1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
+reg1_1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_reg_ready)
 summary(reg1_1_div)
 ```
 ```{r}
 # Check for association between main variables
-cor(data_inst[c("ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Lag_Institutional_Ownership", "Delta_Institutional_Ownership")], use = "complete.obs")
+cor(data_reg_ready[c("ShareRepurchase_Dummy", "ShareRepurchase_Amount", "Total_Assets", "Tier1Capital_Ratio", "Institutional_Ownership", "Lag_Institutional_Ownership", "Delta_Institutional_Ownership")], use = "complete.obs")
 
 # Check for coefficients of the probit model with no Institutional Ownership
-reg1_no_inst <- glm(ShareRepurchase_Dummy ~ Total_Assets + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
-reg1_no_tier1 <- glm(ShareRepurchase_Dummy ~ Total_Assets + Lag_Institutional_Ownership + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1_no_inst <- glm(ShareRepurchase_Dummy ~ log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
+reg1_no_tier1 <- glm(ShareRepurchase_Dummy ~ log(Total_Assets) + Lag_Institutional_Ownership + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
 # Check whether results hold if using size quintile
-reg1_quintile <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1_quintile <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
 # Logit
-reg1_1_quintile <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
+reg1_1_quintile <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_reg_ready)
 # Dividend Dummy
-reg1_div_quintile <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1_div_quintile <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
 # Logit
-reg1_div_1_quintile <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
+reg1_div_1_quintile <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_reg_ready)
 
 # Dividend Dummy on the RHS
-reg1_quintile_div <- glm(ShareRepurchase_Dummy ~ Dividend_Dummy + Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_inst)
+reg1_quintile_div <- glm(ShareRepurchase_Dummy ~ Dividend_Dummy + Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
 # Logit
-reg1_1_quintile_div <- glm(ShareRepurchase_Dummy ~ Dividend_Dummy + Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_inst)
-
+reg1_1_quintile_div <- glm(ShareRepurchase_Dummy ~ Dividend_Dummy + Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_reg_ready)
 
 # stargazer to output the regression results to a text file
 stargazer(reg1, reg1_1, reg1_no_inst, reg1_no_tier1, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Dummy_Regression.txt")
@@ -516,34 +461,31 @@ library(margins)
 library(sandwich)
 library(lmtest)
 
-cl_ccov_mat_check1 <- vcovCL(reg1_quintile_div, type = "HC1", cluster = data_inst$yearq)
-margins(reg1_quintile_div, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Size_Quintile = mean(data_inst$Size_Quintile), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat_check1, variables = c("Lag_Institutional_Ownership", "Size_Quintile", "Tier1Capital_Ratio"))
-cl_ccov_mat_check2 <- vcovCL(reg1_1_quintile_div, type = "HC1", cluster = data_inst$yearq)
-margins(reg1_1_quintile_div, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Size_Quintile = mean(data_inst$Size_Quintile), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat_check2, variables = c("Lag_Institutional_Ownership", "Size_Quintile", "Tier1Capital_Ratio"))
+cl_ccov_mat_check1 <- vcovCL(reg1_quintile_div, type = "HC1", cluster = data_reg_ready$yearq)
+margins(reg1_quintile_div, data = data_reg_ready, at = list(Lag_Institutional_Ownership = mean(data_reg_ready$Lag_Institutional_Ownership), Size_Quintile = mean(data_reg_ready$Size_Quintile), Tier1Capital_Ratio = mean(data_reg_ready$Tier1Capital_Ratio)), vcov = cl_ccov_mat_check1, variables = c("Lag_Institutional_Ownership", "Size_Quintile", "Tier1Capital_Ratio"))
+cl_ccov_mat_check2 <- vcovCL(reg1_1_quintile_div, type = "HC1", cluster = data_reg_ready$yearq)
+margins(reg1_1_quintile_div, data = data_reg_ready, at = list(Lag_Institutional_Ownership = mean(data_reg_ready$Lag_Institutional_Ownership), Size_Quintile = mean(data_reg_ready$Size_Quintile), Tier1Capital_Ratio = mean(data_reg_ready$Tier1Capital_Ratio)), vcov = cl_ccov_mat_check2, variables = c("Lag_Institutional_Ownership", "Size_Quintile", "Tier1Capital_Ratio"))
 ```
 
 ```{r}
 
-# Regression 2: Share Repurchase Amount on Average Institutional Ownership using data_inst with atq and year FE
-data_inst_repur <- data_inst %>%
+# Regression 2: Share Repurchase Amount on Average Institutional Ownership using data_reg_ready with atq and year FE
+data_reg_ready_repur <- data_reg_ready %>%
   filter(ShareRepurchase_Amount > 0)
-reg2 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), data = data_inst_repur)
-summary(reg2)
-
+reg2 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur)
 # Method 2: Use recursive methods as in CEO Ownership, Leasing, and Debt Financing
 # Hamid Mehran, Robert A. Taggart and David Yermack
 # Financial Management
 # Vol. 28, No. 2 (Summer, 1999), pp. 5-14 (10 pages)
 
 # Basically use the predicted value of the first regression as an explanatory variable in the second regression 
-# Attach predicted to the data_inst dataset
-data_inst <- data_inst %>%
-  mutate(predicted = predict(reg1))
-reg3 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + predicted + factor(yearq), data = data_inst)
-reg4 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Total_Assets + Tier1Capital_Ratio + factor(yearq), data = data_inst)
+# Attach predicted to the data_reg_ready dataset
+data_reg_ready <- data_reg_ready %>%
+  mutate(predicted = predict(reg1_quintile))
+reg3 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + predicted + factor(yearq), data = data_reg_ready)
+reg4 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready)
 # Use stargazer to generate regression table and don't show factor variables
-stargazer(reg1, reg1_1, reg2, reg3, reg4, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression.txt")
-summary(reg4)
+stargazer(reg1_quintile, reg1_1_quintile, reg2, reg3, reg4, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression.txt")
 ```
 
 ```{r}
@@ -552,146 +494,87 @@ library(margins)
 library(sandwich)
 library(lmtest)
 
-cl_ccov_mat1 <- vcovCL(reg1, type = "HC1", cluster = data_inst$yearq)
-margins(reg1, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Total_Assets = mean(data_inst$Total_Assets), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat1, variables = c("Lag_Institutional_Ownership", "Total_Assets", "Tier1Capital_Ratio"))
-cl_ccov_mat2 <- vcovCL(reg1_1, type = "HC1", cluster = data_inst$yearq)
-margins(reg1_1, data = data_inst, at = list(Lag_Institutional_Ownership = mean(data_inst$Lag_Institutional_Ownership), Total_Assets = mean(data_inst$Total_Assets), Tier1Capital_Ratio = mean(data_inst$Tier1Capital_Ratio)), vcov = cl_ccov_mat2, variables = c("Lag_Institutional_Ownership", "Total_Assets", "Tier1Capital_Ratio"))
-cl_ccov_mat3 <- vcovCL(reg2, type = "HC1", cluster = data_inst_repur$yearq)
+cl_ccov_mat1 <- vcovCL(reg1, type = "HC1", cluster = data_reg_ready$yearq)
+margins(reg1, data = data_reg_ready, at = list(Lag_Institutional_Ownership = mean(data_reg_ready$Lag_Institutional_Ownership), Total_Assets = mean(data_reg_ready$Total_Assets), Tier1Capital_Ratio = mean(data_reg_ready$Tier1Capital_Ratio)), vcov = cl_ccov_mat1, variables = c("Lag_Institutional_Ownership", "Total_Assets", "Tier1Capital_Ratio"))
+cl_ccov_mat2 <- vcovCL(reg1_1, type = "HC1", cluster = data_reg_ready$yearq)
+margins(reg1_1, data = data_reg_ready, at = list(Lag_Institutional_Ownership = mean(data_reg_ready$Lag_Institutional_Ownership), Total_Assets = mean(data_reg_ready$Total_Assets), Tier1Capital_Ratio = mean(data_reg_ready$Tier1Capital_Ratio)), vcov = cl_ccov_mat2, variables = c("Lag_Institutional_Ownership", "Total_Assets", "Tier1Capital_Ratio"))
+cl_ccov_mat3 <- vcovCL(reg2, type = "HC1", cluster = data_reg_ready_repur$yearq)
 reg2coeffs_cl <- coeftest(reg2, vcov = cl_ccov_mat3)
 reg2coeffs_cl
 ```
 
 ```{r}
-# New Analysis Split by Large Banks (Top 50) and Regional Banks (Those with assets in the next 100 banks)
-# Generate dummy variable for the next 100 banks in each fyearq fqtr by atq of the quarter before
-data <- data %>%
-  group_by(fyearq, fqtr) %>%
-  mutate(rank = rank(-atq)) %>%
-  ungroup() %>%
-  mutate(next100 = ifelse(rank > 50 & rank <= 150, 1, 0))
-# generate new variable next100_prev_quarter that equals 1 if the bank is in the next 100 in the previous quarter
-data <- data %>%
-  group_by(tic) %>%
-  mutate(next100_prev_quarter = lag(next100, 1)) %>%
-  ungroup() %>%
-  mutate(next100_prev_quarter = ifelse(is.na(next100_prev_quarter), 0, next100_prev_quarter))
-# keep if only in the top 50 or next 100 in previous quarter
-data_top150 <- data %>%
-  filter(top50_prev_quarter == 1 | next100_prev_quarter == 1)
-# Generate plots of share repurchase and dividend for the Top 50 banks and the next 100 banks in the same figure
-data_top150_plot <- data_top150 %>%
-  group_by(fyearq, top50_prev_quarter) %>%
-  summarise(total_dividend = sum(dividend, na.rm = TRUE),
-            total_repurchase = sum(repurchase, na.rm = TRUE),
-            total_firms = n(), 
-            total_dividend_firms = sum(dividend_dummy, na.rm = TRUE),
-            total_repurchase_firms = sum(repurchase_dummy, na.rm = TRUE))
-# plot the times series trend of share repurchase and dividend sums in one figure for the Top 50 banks and the next 100 banks
-data_top150_plot %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top50_prev_quarter))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Share Repurchase by Top 50 and Regional Banks",
-       x = "Year",
-       y = "Total Share Repurchase ($billion)",
-       color = "Top 50 Banks Dummy") +
-  theme_minimal() +
-  theme(legend.position = "top")
+# Re-run the regressions by splitting the sample by before/after 2010
+data_reg_ready_2010 <- data_reg_ready %>%
+  filter(fyearq < 2010)
+data_reg_ready_repur_2010 <- data_reg_ready_repur %>%
+  filter(fyearq < 2010)
+data_reg_ready_after_2010 <- data_reg_ready %>%
+  filter(fyearq >= 2010)
+data_reg_ready_repur_after_2010 <- data_reg_ready_repur %>%
+  filter(fyearq >= 2010)
+
+# Regression 1: Share Repurchase Dummy on Average Institutional Ownership using data_reg_ready with atq and year-quarter FE (probit)
+reg1_2010 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_2010)
+reg1_after_2010 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_after_2010)
+reg2_2010_amount <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_2010)
+reg2_after_2010_amount <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Size_Quintile + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_after_2010)
+# output in table
+stargazer(reg1_2010, reg1_after_2010, reg2_2010_amount, reg2_after_2010_amount, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression_2010.txt")
+``` 
+
+```{r}
+# Do the same regressions for subsamples (G-SIB, Large, and Regional Banks) using a for loop that loops for each
+size_buckets <- unique(data_reg_ready$size_prev_quarter)
+# Regional
+data_reg_ready_regional <- data_reg_ready %>%
+  filter(size_prev_quarter == "Regional")
+data_reg_ready_repur_regional <- data_reg_ready_repur %>%
+  filter(size_prev_quarter == "Regional")
+reg1_regional <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_regional)
+reg2_regional <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_regional)
+# Large
+data_reg_ready_large <- data_reg_ready %>%
+  filter(size_prev_quarter == "Large")
+data_reg_ready_repur_large <- data_reg_ready_repur %>%
+  filter(size_prev_quarter == "Large")
+reg1_large <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_large)
+reg2_large <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_large)
+# G-SIB
+data_reg_ready_gsib <- data_reg_ready %>%
+  filter(size_prev_quarter == "G-SIB")
+data_reg_ready_repur_gsib <- data_reg_ready_repur %>%
+  filter(size_prev_quarter == "G-SIB")
+reg1_gsib <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_gsib)
+reg2_gsib <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_gsib)
+# output in table
+stargazer(reg1_regional, reg2_regional, reg1_large, reg2_large, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression_BySize.txt")
 ```
 
 ```{r}
-# Use the Top 10 banks in each year quarter as the Top 10 banks
-data <- data %>%
-  group_by(fyearq, fqtr) %>%
-  mutate(rank = rank(-atq)) %>%
-  ungroup() %>%
-  mutate(top10 = ifelse(rank <= 10, 1, 0))
-# generate new variable top10_prev_quarter that equals 1 if the bank is in the top 10 in the previous quarter
-data <- data %>%
-  group_by(tic) %>%
-  mutate(top10_prev_quarter = lag(top10, 1)) %>%
-  ungroup() %>%
-  mutate(top10_prev_quarter = ifelse(is.na(top10_prev_quarter), 0, top10_prev_quarter))
-# Keep only the top 50 banks in the previous quarter
-data_top50 <- data %>%
-  filter(top50_prev_quarter == 1)
-
-# Generate plots of share repurchase and dividend for the Top 10 banks and the next 40 banks in the same figure (including tier 1 capital ratio and assets)
-data_top50_plot <- data_top50 %>%
-  group_by(fyearq, top10_prev_quarter) %>%
-  summarise(total_dividend = sum(dividend, na.rm = TRUE),
-            total_repurchase = sum(repurchase, na.rm = TRUE),
-            total_firm_quarters = n(), 
-            total_dividend_firm_quarters = sum(dividend_dummy, na.rm = TRUE),
-            total_repurchase_firm_quarters = sum(repurchase_dummy, na.rm = TRUE),
-            avg_capr1q = mean(capr1q, na.rm = TRUE),
-            avg_atq = mean(atq, na.rm = TRUE),
-            avg_net_income = mean(niq, na.rm = TRUE),
-            avg_retained_earnings = mean(req, na.rm = TRUE))
-# drop if any variables are missing
-data_top50_plot <- data_top50_plot %>%
-  drop_na(total_dividend, total_repurchase, avg_capr1q, avg_atq, avg_net_income, avg_retained_earnings)
-
-# divide net_income and retained_earnings by 1000 to get to billions
-data_top50_plot <- data_top50_plot %>%
-  mutate(avg_net_income = avg_net_income / 1000,
-         avg_retained_earnings = avg_retained_earnings / 1000)
-# save the above dataset to csv
-write.csv(data_top50_plot, "../Results/ShareRepurchase_byTop50.csv")
-
-# plot the times series trend of share repurchase and dividend sums in one figure for the Top 10 banks and the next 40 banks
-data_top50_plot %>%
-  ggplot(aes(x = fyearq, y = total_repurchase, color = factor(top10_prev_quarter))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Share Repurchase by Top 10 and Next 40 Banks",
-       x = "Year",
-       y = "Total Share Repurchase ($billion)",
-       color = "Top 10 Banks Dummy") +
-  theme_minimal() +
-  theme(legend.position = "top")
-# save to pdf
-ggsave("../Results/ShareRepurchase_byTop50.pdf")
-data_top50_plot %>%
-  ggplot(aes(x = fyearq, y = total_dividend, color = factor(top10_prev_quarter))) +
-  geom_line() +
-  geom_point() +
-  labs(title = "Dividend Payout by Top 10 and Next 40 Banks",
-       x = "Year",
-       y = "Total Dividend ($billion)",
-       color = "Top 10 Banks Dummy") +
-  theme_minimal() +
-  theme(legend.position = "top")
-# save to pdf
-ggsave("../Results/Dividend_byTop50.pdf")
-```
-
-```{r}
-data_top50_plot_top10 <- data_top50_plot %>%
-  filter(top10_prev_quarter == 1)
-ggplot(data_top50_plot_top10, aes(x = fyearq)) +
-  geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
-  geom_line(aes(y = total_dividend, color = "Total Dividend")) +
-  geom_line(aes(y = avg_capr1q, color = "Capr1 Ratio")) +
-  scale_y_continuous(
-    name = "Total Amount ($billion)",
-    sec.axis = sec_axis(~./100, name = "Ratio")
-  ) +
-  labs(color = "Legend") +
-  theme_minimal() +
-  theme(legend.position = "top")
-# Save to Results folder as pdf
-data_top50_plot_next40 <- data_top50_plot %>%
-  filter(top10_prev_quarter == 0)
-ggplot(data_top50_plot_next40, aes(x = fyearq)) +
-  geom_line(aes(y = total_repurchase, color = "Total Share Repurchase")) +
-  geom_line(aes(y = total_dividend, color = "Total Dividend")) +
-  geom_line(aes(y = avg_capr1q, color = "Capr1 Ratio")) +
-  scale_y_continuous(
-    name = "Total Amount ($billion)",
-    sec.axis = sec_axis(~./100, name = "Ratio")
-  ) +
-  labs(color = "Legend") +
-  theme_minimal() +
-  theme(legend.position = "top")
+# Output the same results but for large+gsib banks
+data_reg_ready_large_gsib <- data_reg_ready %>%
+  filter(size_prev_quarter != "Regional")
+data_reg_ready_repur_large_gsib <- data_reg_ready_repur %>%
+  filter(size_prev_quarter != "Regional")
+reg1_large_gsib <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_large_gsib)
+reg2_large_gsib <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_large_gsib)
+# output in table
+stargazer(reg1_gsib, reg2_gsib, reg1_large_gsib, reg2_large_gsib, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression_Large_GSIB.txt")
+# Output the same results but for large+gsib banks and split based on before/after 2010
+data_reg_ready_large_gsib_2010 <- data_reg_ready_large_gsib %>%
+  filter(fyearq < 2010)
+data_reg_ready_repur_large_gsib_2010 <- data_reg_ready_repur_large_gsib %>%
+  filter(fyearq < 2010)
+data_reg_ready_large_gsib_after_2010 <- data_reg_ready_large_gsib %>%
+  filter(fyearq >= 2010)
+data_reg_ready_repur_large_gsib_after_2010 <- data_reg_ready_repur_large_gsib %>%
+  filter(fyearq >= 2010)
+reg1_large_gsib_2010 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_large_gsib_2010)
+reg2_large_gsib_2010 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_large_gsib_2010)
+reg1_large_gsib_after_2010 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready_large_gsib_after_2010)
+reg2_large_gsib_after_2010 <- lm(ShareRepurchase_Amount ~ Lag_Institutional_Ownership + Tier1Capital_Ratio + factor(yearq), data = data_reg_ready_repur_large_gsib_after_2010)
+# output in table
+stargazer(reg1_large_gsib_2010, reg2_large_gsib_2010, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression_Large_GSIB_Before2010.txt")
+stargazer(reg1_large_gsib_after_2010, reg2_large_gsib_after_2010, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Regression_Large_GSIB_After2010.txt")
 ```
