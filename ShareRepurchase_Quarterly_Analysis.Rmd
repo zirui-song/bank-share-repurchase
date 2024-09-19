@@ -417,17 +417,16 @@ data_reg_ready <- data_reg_ready %>%
   mutate(Size_Quintile = ntile(Total_Assets, 5))
 
 reg1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
-summary(reg1)
+
 # Logit
 reg1_1 <- glm(ShareRepurchase_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_reg_ready)
-summary(reg1_1)
 
 ### Dividend
 reg1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "probit"), data = data_reg_ready)
-summary(reg1_div)
 # Logit
 reg1_1_div <- glm(Dividend_Dummy ~ Lag_Institutional_Ownership + log(Total_Assets) + Tier1Capital_Ratio + factor(yearq), family = binomial(link = "logit"), data = data_reg_ready)
-summary(reg1_1_div)
+
+stargazer(reg1, reg1_1, reg1_div, reg1_1_div, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Dividend_Dummy_Regression.txt")
 ```
 ```{r}
 # Check for association between main variables
@@ -455,6 +454,11 @@ stargazer(reg1, reg1_1, reg1_no_inst, reg1_no_tier1, type = "text", omit = "fact
 # stargazer reg1_quintile
 stargazer(reg1_quintile, reg1_1_quintile, reg1_quintile_div, reg1_1_quintile_div, type = "text", omit = "factor", out = "../Results/ShareRepurchase_Dummy_Regression_Quintile.txt")
 ```
+
+```{r}
+stargazer(reg1_div_quintile, reg1_div_1_quintile, type = "text", omit = "factor", out = "../Results/Dividend_Dummy_Regression_Quintile.txt")
+```
+
 ```{r}
 # Get average marginal effects
 library(margins)
