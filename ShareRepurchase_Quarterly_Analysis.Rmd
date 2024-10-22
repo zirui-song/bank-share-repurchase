@@ -40,15 +40,19 @@ data_tr <- data_tr %>%
          fqtr = ifelse(month(rdate) %in% 1:3, 1, ifelse(month(rdate) %in% 4:6, 2, ifelse(month(rdate) %in% 7:9, 3, 4)))
   )
 
-# check if ticker fyearq fqtr is unique in the dataset
-data_tr %>%
+# check manually for JPM
+tr_check <- data_tr %>%
+  filter(ticker == "JPM") 
+tr_check_filtered <- tr_check %>%
   group_by(ticker, fyearq, fqtr) %>%
-  summarise(total = n()) %>%
-  filter(total > 1)
-# select the first row by ticker fyearq fqtr in case of duplicates
+  filter(InstOwn_Perc == max(InstOwn_Perc)) %>%
+  ungroup()
+
+# select the row with the larger InstOwn_Percent by ticker fyearq fqtr in case of duplicates
 data_tr <- data_tr %>%
   group_by(ticker, fyearq, fqtr) %>%
-  slice(1)
+  filter(InstOwn_Perc == max(InstOwn_Perc)) %>%
+  ungroup()
 
 # rename ticker to tic
 data_tr <- data_tr %>%
@@ -62,7 +66,7 @@ data_tr <- data_tr %>%
 compustat <- fread("../Data/compustat_quarterly.csv")
 # Put the variable gvkey fyearq fqtr dvpy dividend dvp repurchase repurchase_a repurchase_q in front 
 data <- compustat %>%
-  dplyr::select(gvkey, tic, fyearq, fqtr, atq, capr1q, niq, ibq, req, dvpy, dvp, dvy, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm, fic)
+  dplyr::select(gvkey, tic, fyearq, fqtr, atq, capr1q, capr1, niq, ibq, req, dvpy, dvc, dvy, tstkq, tstk, prstkcy, sstky, prstkc, sstk, naicsh, conm, fic)
 
 # make sure the panel is balanced with no missing year-quarter 
 data <- data %>%
@@ -129,7 +133,7 @@ data <- data %>%
 # arrange data to view the data
 data <- data %>%
   arrange(tic, fyearq, fqtr) %>% 
-  select(tic, fyearq, fqtr, tstkq, tstk, prstkcy, sstky, prstkcy1, sstky1, repurchase, dvpy, dvp, dvy, dividend, everything())
+  select(tic, fyearq, fqtr, tstkq, tstk, prstkcy, sstky, prstkcy1, sstky1, repurchase, dvpy, dvc, dvy, dividend, everything())
 
 # keep only those with valid ticker (drop those with "")
 data <- data %>%
@@ -303,11 +307,11 @@ ggsave("../Results/Total_Div_Repur_Banks_Size.pdf")
 
 ```{r}
 ### New Plots with Institutional Holdings and Capr1 Ratio Overlayed with Total Dividends and Share Repurchase
-# Figure 3 AND 4
+# Figure 4 AND 5
 
 # keep only those observations with valid institutional holdings (non-NA InstOwn_Perc) and capr1q and asset
 data_final_clean <- data_final %>%
-  filter(!is.na(InstOwn_Perc)) %>% filter(!is.na(capr1q)) %>% filter(!is.na(atq))
+  filter(!is.na(InstOwn_Perc)) %>%  filter(!is.na(atq))
 # get rid of negative values in capr1q and those with > 100 capr1q
 data_final_clean <- data_final_clean %>% filter(capr1q >= 0) %>% filter(capr1q <= 100)
 # get rid of InstOwn_Perc that are larger than 1
